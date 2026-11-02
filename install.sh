@@ -74,11 +74,11 @@ if (( EUID != 0 )); then
 fi
 
 shopt -s nullglob
-batteries=(/sys/class/power_supply/BAT*/charge_control_end_threshold)
+batteries=(/sys/class/power_supply/*/charge_control_end_threshold)
 shopt -u nullglob
 
 (( ${#batteries[@]} > 0 )) ||
-  die "no compatible battery found. This tool requires an ASUS laptop using the asus-wmi driver."
+  die "no compatible battery found. Your laptop does not expose charge_control_end_threshold; see the compatibility section in README.md."
 
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 [[ -f "$src/bin/battery-limit" ]] || die "bin/battery-limit not found next to install.sh"

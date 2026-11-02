@@ -1,13 +1,15 @@
 # battery-limit
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#requirements)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#linux-support)
 [![Shell: Bash](https://img.shields.io/badge/shell-bash-4EAA25.svg)](#requirements)
 
-A small, dependency-free CLI that sets a battery charge limit on ASUS laptops
-running Linux. It is the Linux equivalent of **MyASUS → Battery Health
-Charging** on Windows: it tells the embedded controller to stop charging at 80%
-and hold the battery there.
+Set a battery charge limit on Linux laptops.
+
+A small, dependency-free CLI that stops battery charging at a chosen percentage.
+It started as a Linux equivalent of **MyASUS → Battery Health Charging** for ASUS
+laptops, but it uses the generic Linux `power_supply` interface and works on many
+other brands when their kernel driver exposes the same file.
 
 No daemon, no extra packages, no patched kernel.
 
@@ -16,32 +18,33 @@ No daemon, no extra packages, no patched kernel.
 Lithium-ion batteries age faster when they sit at 100% for long periods,
 especially while warm. If your laptop is plugged in most of the day, stopping at
 80% can meaningfully extend the battery's useful life. The same feature has
-been available in MyASUS for years; this project exposes it on Linux through the
-standard kernel interface.
+been available in vendor tools for years; this project exposes it on Linux
+through the standard kernel interface.
 
 ## Features
 
-- Uses the in-tree `asus-wmi` driver — no proprietary software and no `asusctl`
-  daemon.
+- Uses the in-tree Linux `power_supply` interface — no proprietary software and
+  no vendor daemon.
 - Applies the limit immediately and re-applies it at every boot with a tiny
   systemd oneshot service.
 - Plain Bash; works on any distribution that exposes the sysfs file.
 - Human-readable `status` and JSON output for scripts.
+- Verifies the value read back from sysfs and reports when the hardware rounds
+  the requested limit to a supported value.
 - Idempotent install and a clean uninstall that restores full charging.
 - MIT licensed.
 
 ## Requirements
 
-- An ASUS TUF/ROG laptop whose embedded controller exposes the charge
-  threshold. Check with:
+A laptop whose kernel exposes the standard charge threshold:
 
-  ```bash
-  ls /sys/class/power_supply/BAT*/charge_control_end_threshold
-  ```
+```bash
+ls /sys/class/power_supply/*/charge_control_end_threshold
+```
 
-  If that file exists, the hardware is supported.
+If that command prints a path, your hardware has the interface. You also need:
 
-- Linux with the in-tree `asus-wmi` driver (tested on kernel 7.2).
+- Linux with the matching kernel driver (in-tree for most supported models).
 - `bash`, `coreutils` and `sudo`.
 - `systemd` only for boot persistence; the CLI itself works without it.
 
@@ -130,18 +133,80 @@ Service:       enabled
 `80%` is the best default for most people. You can change the limit at any time
 without reinstalling.
 
+## Compatibility
+
+Support depends on the laptop's firmware and kernel driver. The table below is
+based on the Linux `power_supply` interface and the vendor notes maintained by
+[TLP](https://linrunner.de/tlp/settings/bc-vendors.html).
+
+| Vendor / family | Kernel interface | Status with this tool | Notes |
+| --- | --- | --- | --- |
+| ASUS TUF / ROG | `asus_wmi` (5.4+) | **Tested** | Tested on a TUF Gaming F15 FX507VV. Some models accept only 40/60/80. The EC resets the threshold on power-on; the service restores it. |
+| Lenovo ThinkPad | `thinkpad_acpi` | **Partial** | Exposes start and end thresholds. This tool sets only the end threshold; set the start threshold with TLP or manually. |
+| Dell | `dell_laptop` (6.12+) | **Partial** | Requires `charge_type=Custom` and no BIOS admin password. TLP handles this setup; this tool does not. |
+| LG Gram | `lg_laptop` (5.18+) | **Expected** | Only 80 or 100 is accepted. |
+| MSI | `msi_ec` (6.3+) | **Model-dependent** | The driver accepts only specific models and BIOS versions. |
+| System76 | `system76_acpi` (5.16+) | **Partial** | Exposes start and end thresholds; the start threshold may need manual adjustment. |
+| Toshiba / Dynabook | `toshiba_acpi` (6.0+) | **Expected** | Only 80 or 100 is accepted. |
+| Chromebooks / Framework | `cros_charge-control` (6.12+; Framework may need 6.17) | **Model-dependent** | Framework EC firmware and module options vary. |
+| Apple Silicon (Asahi) | `macsmc_power` (6.3+) | **Expected** | Battery device is `macsmc-battery`; only 80 or 100 is accepted. |
+| Tuxedo / Clevo | `clevo_acpi` (out-of-tree `tuxedo-drivers`) | **Model-dependent** | Discrete threshold values only. |
+| Lenovo IdeaPad | `conservation_mode` | **Not supported** | Uses a vendor-specific file instead of the standard interface. |
+| Huawei MateBook | `charge_control_thresholds` | **Not supported** | Uses a different sysfs path. |
+| Samsung | `battery_life_extender` | **Not supported** | Vendor-specific sysfs. |
+| Sony VAIO | `battery_care_limiter` | **Not supported** | Vendor-specific sysfs. |
+| Acer, HP, others | varies | **Check** | Run the `ls` command in [Requirements](#requirements). |
+
+**Tested** means this project has been verified on that hardware. **Expected**
+means the standard interface exists but this project has not been tested on that
+family. **Partial** means some setup is missing. **Model-dependent** means support
+varies by model and BIOS.
+
+If your laptop exposes the file but the limit does not work, open an issue with:
+
+```bash
+cat /sys/class/dmi/id/product_name
+uname -r
+ls /sys/class/power_supply/*/charge_control*
+```
+
+## Linux support
+
+The tool is distribution-agnostic: it only needs Bash, coreutils and sysfs.
+
+- **systemd distributions** — Arch, Omarchy, Fedora, Ubuntu, Debian, openSUSE,
+  Linux Mint, Pop!_OS, EndeavourOS, CachyOS, Manjaro and others: use the
+  installer normally.
+- **Non-systemd distributions** — Alpine, Void, Artix and others: install with
+  `--no-service`, then run `battery-limit apply` from your init system or
+  session autostart.
+- **NixOS** — package the script and unit declaratively; `/usr/local` is not the
+  right place.
+- **Windows, macOS, BSD** — not supported; this is a Linux `power_supply`
+  interface.
+- **WSL, containers, virtual machines** — no physical battery, so there is
+  nothing to limit.
+
+This project is not packaged in distribution repositories yet. On Arch and
+Omarchy, install it from source with the steps above. An AUR package would be a
+welcome contribution.
+
 ## How it works
 
-The Linux `asus-wmi` driver exposes the embedded controller's charge threshold
-through the standard `power_supply` class:
+The Linux kernel exposes the embedded controller's charge threshold through the
+standard `power_supply` class:
 
 ```text
 /sys/class/power_supply/BAT0/charge_control_end_threshold
 ```
 
 Writing `80` tells the controller to stop charging when the battery reaches
-80%. Writing `100` removes the limit. This is the same interface used by
-`asusctl` and by desktop power panels.
+80%. Writing `100` removes the limit. This is the same interface used by TLP,
+`asusctl` and many desktop power panels.
+
+The exact driver depends on the laptop: `asus_wmi`, `thinkpad_acpi`,
+`dell_laptop`, `lg_laptop`, `msi_ec`, `system76_acpi`, `toshiba_acpi`,
+`cros_charge-control`, `macsmc_power`, and others.
 
 `install.sh` stores the desired value in `/etc/battery-limit.conf`:
 
@@ -150,12 +215,12 @@ LIMIT=80
 ```
 
 `battery-limit.service` runs `battery-limit apply` at boot and re-applies that
-value. The controller normally remembers the setting across reboots; the
-service is there to restore it after a full power loss or firmware reset.
+value. Some controllers remember the setting across reboots; others reset it on
+power-on. The service covers both cases.
 
 ## Persistence
 
-- The active limit survives suspend and normal reboots on its own.
+- The active limit usually survives suspend and normal reboots on its own.
 - The systemd service re-applies the saved value at every boot.
 - `battery-limit set N` updates both the hardware and
   `/etc/battery-limit.conf`, so the change is permanent.
@@ -183,22 +248,13 @@ charge limit back to 100%.
 
 | Symptom | What to do |
 | --- | --- |
-| `no battery with charge_control_end_threshold found` | Your model may not expose the interface. Check the `ls` command above, update the BIOS/kernel, or use `asusctl` if it supports your model. |
+| `no battery with charge_control_end_threshold found` | Your model may not expose the interface. Run the `ls` command from [Requirements](#requirements), update the BIOS/kernel, or use TLP or a vendor tool. |
+| `Requested 80%, but the hardware accepted 60%` | The firmware only supports discrete values. Use the value it accepted. |
 | `Permission denied` when setting the limit | Run the command as root or with `sudo`. The installed service already runs as root. |
 | The limit resets after unplugging the laptop | Some controllers lose the value after a full power loss. The service re-applies it at boot; check `systemctl status battery-limit.service`. |
 | The battery stays above the limit | Expected. The controller pauses charging; it does not force the battery to discharge. Let it drop below the limit or unplug it for a while. |
 | The service does not start | Inspect `systemctl status battery-limit.service` and `journalctl -u battery-limit.service`. |
 | `systemctl` is not available | Reinstall with `--no-service`, then run `battery-limit apply` from your init system or autostart. |
-
-## Compatibility
-
-- **Tested on:** ASUS TUF Gaming F15 FX507VV (2023), Omarchy/Arch, Linux 7.2.
-- **Expected to work on:** most recent ASUS TUF/ROG laptops that expose
-  `charge_control_end_threshold`.
-- **Not supported:** non-ASUS laptops and Windows.
-
-If you test it on another model, please open an issue with your model name
-(`cat /sys/class/dmi/id/product_name`) and kernel version.
 
 ## Repository layout
 
@@ -223,17 +279,20 @@ variables.
 
 ## Related projects
 
-- [asusctl](https://gitlab.com/asus-linux/asusctl) — full ASUS control suite
-  (fan curves, keyboard lighting, graphics mode, and more).
-- [TLP](https://linrunner.de/tlp/) — general Linux power management.
+- [TLP](https://linrunner.de/tlp/) — mature power management with battery charge
+  thresholds for many vendors, including start and stop thresholds.
+- [asusctl](https://gitlab.com/asus-linux/asusctl) — ASUS control suite (fan
+  curves, keyboard lighting, graphics mode, and more).
+- [Battery Health Charging](https://github.com/maniacx/Battery-Health-Charging)
+  — GNOME extension with a graphical charge-limit interface for many brands.
 
-This project intentionally does one thing: set the charge limit and keep it
+This project intentionally does one thing: set the stop threshold and keep it
 set.
 
 ## Contributing
 
-Issues and pull requests are welcome, especially reports from other ASUS models.
-Please run `make test` and `make lint` before submitting a PR.
+Issues and pull requests are welcome, especially reports from laptops not listed
+as tested. Please run `make test` and `make lint` before submitting a PR.
 
 ## License
 
@@ -241,6 +300,6 @@ Please run `make test` and `make lint` before submitting a PR.
 
 ## Disclaimer
 
-This is an independent project and is not affiliated with ASUS. It writes a
-standard kernel interface provided by the `asus-wmi` driver. Use it at your own
-risk.
+This is an independent project and is not affiliated with ASUS or any other
+vendor. It writes a standard kernel interface provided by your laptop's driver.
+Use it at your own risk.

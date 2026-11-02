@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 #
-# battery-limit — set a battery charge limit on ASUS laptops running Linux.
+# battery-limit — set a battery charge limit on Linux laptops that expose the
+# standard power_supply charge threshold interface.
 #
-# Uses the standard power_supply interface provided by the in-tree asus-wmi
-# driver:
+# The interface is provided by in-tree drivers such as asus-wmi, thinkpad_acpi,
+# dell_laptop, lg_laptop, msi_ec, system76_acpi, toshiba_acpi and
+# cros_charge-control:
 #
-#   /sys/class/power_supply/BAT*/charge_control_end_threshold
+#   /sys/class/power_supply/*/charge_control_end_threshold
 #
 # A value of 100 disables the limit. A value of 80 stops charging at 80%.
 #
@@ -14,7 +16,7 @@
 
 set -euo pipefail
 
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 readonly DEFAULT_LIMIT=80
 readonly MIN_LIMIT=40
 readonly MAX_LIMIT=100
@@ -36,7 +38,7 @@ threshold_file() {
     return 0
   fi
 
-  for dir in /sys/class/power_supply/BAT*; do
+  for dir in /sys/class/power_supply/*; do
     if [[ -e "$dir/charge_control_end_threshold" ]]; then
       printf '%s\n' "$dir/charge_control_end_threshold"
       return 0
@@ -49,7 +51,7 @@ threshold_file() {
 threshold() {
   local file
   file=$(threshold_file) ||
-    die "no battery with charge_control_end_threshold found. This tool requires an ASUS laptop using the asus-wmi driver."
+    die "no battery with charge_control_end_threshold found. Your laptop does not expose the standard Linux charge threshold interface."
   printf '%s\n' "$file"
 }
 
@@ -97,7 +99,7 @@ require_root() {
 }
 
 write_limit() {
-  local value=$1 file
+  local value=$1 file actual
 
   validate_limit "$value"
   file=$(threshold)
@@ -105,7 +107,11 @@ write_limit() {
   printf '%s\n' "$value" > "$file" ||
     die "could not write to $file. Are you root?"
 
-  if (( value == 100 )); then
+  actual=$(cat "$file")
+
+  if [[ $actual != "$value" ]]; then
+    printf 'Requested %s%%, but the hardware accepted %s%%.\n' "$value" "$actual"
+  elif (( value == 100 )); then
     printf 'Charge limit disabled; the battery will charge to 100%%.\n'
   else
     printf 'Charge limit set to %s%%.\n' "$value"

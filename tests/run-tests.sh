@@ -71,4 +71,18 @@ if "$bl" set 30 >/dev/null 2>&1; then
 fi
 ok "invalid limits are rejected"
 
+# Detection is not limited to BAT* names (e.g. Apple Silicon uses macsmc-battery).
+mac="$tmp/macsmc-battery"
+mkdir -p "$mac"
+printf '100\n' > "$mac/charge_control_end_threshold"
+printf '50\n' > "$mac/capacity"
+printf 'Discharging\n' > "$mac/status"
+
+BATTERY_LIMIT_SYSFS="$mac/charge_control_end_threshold" \
+  BATTERY_LIMIT_CONF="$tmp/mac.conf" \
+  "$bl" set 80 >/dev/null
+mac_limit=$(BATTERY_LIMIT_SYSFS="$mac/charge_control_end_threshold" "$bl" get)
+[[ $mac_limit == "80" ]] || fail "non-BAT power supply was not detected"
+ok "detects non-BAT power supplies (e.g. macsmc-battery)"
+
 printf '\nAll %d tests passed.\n' "$passed"
