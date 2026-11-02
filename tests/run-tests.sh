@@ -18,6 +18,7 @@ printf 'Discharging\n' > "$bat/status"
 export BATTERY_LIMIT_SYSFS="$bat/charge_control_end_threshold"
 export BATTERY_LIMIT_CONF="$tmp/battery-limit.conf"
 export BATTERY_LIMIT_ALLOW_NONROOT=1
+export BATTERY_LIMIT_CHASSIS=10
 
 bl="$repo/bin/battery-limit"
 passed=0
@@ -71,18 +72,46 @@ if "$bl" set 30 >/dev/null 2>&1; then
 fi
 ok "invalid limits are rejected"
 
-# Detection is not limited to BAT* names (e.g. Apple Silicon uses macsmc-battery).
-mac="$tmp/macsmc-battery"
-mkdir -p "$mac"
-printf '100\n' > "$mac/charge_control_end_threshold"
-printf '50\n' > "$mac/capacity"
-printf 'Discharging\n' > "$mac/status"
+# Detection is not limited to BAT* names (e.g. CMB0 on some laptops).
+cmb="$tmp/CMB0"
+mkdir -p "$cmb"
+printf '100\n' > "$cmb/charge_control_end_threshold"
+printf '50\n' > "$cmb/capacity"
+printf 'Discharging\n' > "$cmb/status"
 
-BATTERY_LIMIT_SYSFS="$mac/charge_control_end_threshold" \
-  BATTERY_LIMIT_CONF="$tmp/mac.conf" \
+BATTERY_LIMIT_SYSFS="$cmb/charge_control_end_threshold" \
+  BATTERY_LIMIT_CONF="$tmp/cmb.conf" \
   "$bl" set 80 >/dev/null
-mac_limit=$(BATTERY_LIMIT_SYSFS="$mac/charge_control_end_threshold" "$bl" get)
-[[ $mac_limit == "80" ]] || fail "non-BAT power supply was not detected"
-ok "detects non-BAT power supplies (e.g. macsmc-battery)"
+cmb_limit=$(BATTERY_LIMIT_SYSFS="$cmb/charge_control_end_threshold" "$bl" get)
+[[ $cmb_limit == "80" ]] || fail "non-BAT power supply was not detected"
+ok "detects non-BAT power supplies (e.g. CMB0)"
+
+# Desktop and server chassis types must be rejected before touching the battery.
+printf '100\n' > "$bat/charge_control_end_threshold"
+if BATTERY_LIMIT_CHASSIS=3 "$bl" set 80 >"$tmp/desktop.out" 2>&1; then
+  fail "desktop chassis should be rejected"
+fi
+[[ $(cat "$bat/charge_control_end_threshold") == "100" ]] ||
+  fail "desktop rejection still wrote to the battery"
+grep -q 'not a laptop' "$tmp/desktop.out" ||
+  fail "desktop rejection message is unclear: $(cat "$tmp/desktop.out")"
+ok "desktop chassis is rejected"
+
+# Unknown chassis types are allowed for firmware that reports them incorrectly.
+if BATTERY_LIMIT_CHASSIS=2 "$bl" set 75 >/dev/null 2>&1; then
+  [[ $(BATTERY_LIMIT_CHASSIS=2 "$bl" get) == "75" ]] ||
+    fail "unknown chassis did not apply the limit"
+else
+  fail "unknown chassis should be allowed"
+fi
+ok "unknown chassis types are allowed"
+
+# The installer must reject desktops before asking for root.
+if BATTERY_LIMIT_CHASSIS=3 "$repo/install.sh" >"$tmp/installer-desktop.out" 2>&1; then
+  fail "installer should reject a desktop chassis"
+fi
+grep -q 'not a laptop' "$tmp/installer-desktop.out" ||
+  fail "installer rejection message is unclear: $(cat "$tmp/installer-desktop.out")"
+ok "installer rejects desktop chassis"
 
 printf '\nAll %d tests passed.\n' "$passed"

@@ -16,16 +16,70 @@
 
 set -euo pipefail
 
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 readonly DEFAULT_LIMIT=80
 readonly MIN_LIMIT=40
 readonly MAX_LIMIT=100
 readonly CONF_FILE="${BATTERY_LIMIT_CONF:-/etc/battery-limit.conf}"
 readonly SYSFS_OVERRIDE="${BATTERY_LIMIT_SYSFS:-}"
+readonly CHASSIS_OVERRIDE="${BATTERY_LIMIT_CHASSIS:-}"
+readonly CHASSIS_FILE="/sys/class/dmi/id/chassis_type"
 
 die() {
   printf 'battery-limit: %s\n' "$*" >&2
   exit 1
+}
+
+# Human-readable name for the SMBIOS chassis types rejected by this tool.
+chassis_label() {
+  case $1 in
+    3) printf 'Desktop' ;;
+    4) printf 'Low Profile Desktop' ;;
+    5) printf 'Pizza Box' ;;
+    6) printf 'Mini Tower' ;;
+    7) printf 'Tower' ;;
+    13) printf 'All-in-One' ;;
+    15) printf 'Space-saving' ;;
+    16) printf 'Lunch Box' ;;
+    17) printf 'Main Server Chassis' ;;
+    18) printf 'Expansion Chassis' ;;
+    19) printf 'SubChassis' ;;
+    20) printf 'Bus Expansion Chassis' ;;
+    21) printf 'Peripheral Chassis' ;;
+    22) printf 'RAID Chassis' ;;
+    23) printf 'Rack Mount Chassis' ;;
+    24) printf 'Sealed-case PC' ;;
+    25) printf 'Multi-system Chassis' ;;
+    26) printf 'Compact PCI' ;;
+    27) printf 'Advanced TCA' ;;
+    28) printf 'Blade' ;;
+    29) printf 'Blade Enclosure' ;;
+    33) printf 'IoT Gateway' ;;
+    34) printf 'Embedded PC' ;;
+    35) printf 'Mini PC' ;;
+    36) printf 'Stick PC' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# Refuse to run on desktops, servers and other AC-powered form factors.
+# Types 1 (Other) and 2 (Unknown) are allowed because some laptops report
+# them; portable and convertible types are allowed as well.
+require_laptop() {
+  local type=$CHASSIS_OVERRIDE
+
+  if [[ -z $type ]]; then
+    type=$(cat "$CHASSIS_FILE" 2>/dev/null || true)
+  fi
+
+  # Firmware that does not report a chassis type is not blocked.
+  [[ $type =~ ^[0-9]+$ ]] || return 0
+
+  case $type in
+    3|4|5|6|7|13|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|33|34|35|36)
+      die "this machine reports SMBIOS chassis type $type ($(chassis_label "$type")), which is not a laptop. battery-limit only runs on laptops; desktops and servers use AC power and do not need a charge limit."
+      ;;
+  esac
 }
 
 # Print the sysfs threshold file, or return 1 if the machine is not supported.
@@ -50,6 +104,8 @@ threshold_file() {
 
 threshold() {
   local file
+
+  require_laptop
   file=$(threshold_file) ||
     die "no battery with charge_control_end_threshold found. Your laptop does not expose the standard Linux charge threshold interface."
   printf '%s\n' "$file"
@@ -94,6 +150,10 @@ require_root() {
 
   command -v sudo >/dev/null 2>&1 ||
     die "root privileges are required. Re-run as root or install sudo."
+
+  if [[ -n $CHASSIS_OVERRIDE ]]; then
+    exec sudo -- env BATTERY_LIMIT_CHASSIS="$CHASSIS_OVERRIDE" "$0" "$@"
+  fi
 
   exec sudo -- "$0" "$@"
 }
@@ -207,7 +267,8 @@ Commands:
   help              Show this help
 
 Environment:
-  BATTERY_LIMIT_CONF   Override the config file (default: /etc/battery-limit.conf)
+  BATTERY_LIMIT_CONF     Override the config file (default: /etc/battery-limit.conf)
+  BATTERY_LIMIT_CHASSIS  Override the detected SMBIOS chassis type
 
 Examples:
   battery-limit status
@@ -221,6 +282,10 @@ EOF
 command=${1:-status}
 
 case "$command" in
+  status|get|set|on|off|toggle|apply) require_laptop ;;
+esac
+
+case "$command" in
   status)
     if [[ ${2:-} == "--json" ]]; then
       show_status_json
@@ -230,7 +295,8 @@ case "$command" in
     ;;
 
   get)
-    cat "$(threshold)"
+    file=$(threshold)
+    cat "$file"
     ;;
 
   set)
@@ -253,7 +319,8 @@ case "$command" in
 
   toggle)
     require_root "$@"
-    if (( $(cat "$(threshold)") >= 100 )); then
+    file=$(threshold)
+    if (( $(cat "$file") >= 100 )); then
       write_limit "$(saved_limit)"
     else
       write_limit 100
@@ -262,6 +329,7 @@ case "$command" in
 
   apply)
     require_root "$@"
+    require_laptop
     limit=$(saved_limit)
     for _ in {1..10}; do
       if threshold_file >/dev/null 2>&1; then

@@ -11,10 +11,60 @@ readonly DEFAULT_LIMIT=80
 readonly MIN_LIMIT=40
 readonly MAX_LIMIT=100
 readonly PREFIX="/usr/local"
+readonly CHASSIS_FILE="/sys/class/dmi/id/chassis_type"
 
 die() {
   printf 'install.sh: %s\n' "$*" >&2
   exit 1
+}
+
+# Human-readable name for the SMBIOS chassis types rejected by this tool.
+chassis_label() {
+  case $1 in
+    3) printf 'Desktop' ;;
+    4) printf 'Low Profile Desktop' ;;
+    5) printf 'Pizza Box' ;;
+    6) printf 'Mini Tower' ;;
+    7) printf 'Tower' ;;
+    13) printf 'All-in-One' ;;
+    15) printf 'Space-saving' ;;
+    16) printf 'Lunch Box' ;;
+    17) printf 'Main Server Chassis' ;;
+    18) printf 'Expansion Chassis' ;;
+    19) printf 'SubChassis' ;;
+    20) printf 'Bus Expansion Chassis' ;;
+    21) printf 'Peripheral Chassis' ;;
+    22) printf 'RAID Chassis' ;;
+    23) printf 'Rack Mount Chassis' ;;
+    24) printf 'Sealed-case PC' ;;
+    25) printf 'Multi-system Chassis' ;;
+    26) printf 'Compact PCI' ;;
+    27) printf 'Advanced TCA' ;;
+    28) printf 'Blade' ;;
+    29) printf 'Blade Enclosure' ;;
+    33) printf 'IoT Gateway' ;;
+    34) printf 'Embedded PC' ;;
+    35) printf 'Mini PC' ;;
+    36) printf 'Stick PC' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# Refuse to install on desktops, servers and other AC-powered form factors.
+require_laptop() {
+  local type=${BATTERY_LIMIT_CHASSIS:-}
+
+  if [[ -z $type ]]; then
+    type=$(cat "$CHASSIS_FILE" 2>/dev/null || true)
+  fi
+
+  [[ $type =~ ^[0-9]+$ ]] || return 0
+
+  case $type in
+    3|4|5|6|7|13|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|33|34|35|36)
+      die "this machine reports SMBIOS chassis type $type ($(chassis_label "$type")), which is not a laptop. battery-limit only runs on laptops; desktops and servers use AC power and do not need a charge limit."
+      ;;
+  esac
 }
 
 usage() {
@@ -69,9 +119,9 @@ if [[ -n $limit ]]; then
     die "limit must be between $MIN_LIMIT and $MAX_LIMIT"
 fi
 
-if (( EUID != 0 )); then
-  exec sudo -- "$0" "${original_args[@]}"
-fi
+# Check the hardware before asking for a password. Both files are readable by
+# unprivileged users.
+require_laptop
 
 shopt -s nullglob
 batteries=(/sys/class/power_supply/*/charge_control_end_threshold)
@@ -79,6 +129,13 @@ shopt -u nullglob
 
 (( ${#batteries[@]} > 0 )) ||
   die "no compatible battery found. Your laptop does not expose charge_control_end_threshold; see the compatibility section in README.md."
+
+if (( EUID != 0 )); then
+  if [[ -n ${BATTERY_LIMIT_CHASSIS:-} ]]; then
+    exec sudo -- env BATTERY_LIMIT_CHASSIS="$BATTERY_LIMIT_CHASSIS" "$0" "${original_args[@]}"
+  fi
+  exec sudo -- "$0" "${original_args[@]}"
+fi
 
 src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 [[ -f "$src/bin/battery-limit" ]] || die "bin/battery-limit not found next to install.sh"
