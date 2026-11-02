@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply ASUS battery charge limit
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/battery-limit apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
