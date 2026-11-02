@@ -102,7 +102,7 @@ See [compatibility](#compatibility) for alternatives.
 ## Install
 
 ```bash
-git clone <repository-url> battery-limit
+git clone https://github.com/WonheeLover/battery-limit.git battery-limit
 cd battery-limit
 sudo ./install.sh
 ```
